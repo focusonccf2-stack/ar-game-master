@@ -1,0 +1,624 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
+<meta name="theme-color" content="#1a0626">
+<title>接住魔王的小魔雲！AR</title>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; -webkit-tap-highlight-color: transparent; }
+  html, body { width: 100%; height: 100%; overflow: hidden; background: #0d0214; color: #fff;
+    font-family: -apple-system, "PingFang TC", "Noto Sans TC", "Microsoft JhengHei", sans-serif; touch-action: none; user-select: none; -webkit-user-select: none; }
+  #stage { position: fixed; inset: 0; }
+  #stage.shake { animation: shake .35s; }
+  @keyframes shake { 0%,100%{transform:translate(0,0)} 20%{transform:translate(-10px,6px)} 40%{transform:translate(9px,-7px)} 60%{transform:translate(-7px,-4px)} 80%{transform:translate(6px,5px)} }
+  #cam, #gl, #fx { position: absolute; inset: 0; width: 100%; height: 100%; }
+  #cam { object-fit: cover; background: #000; }
+  .mirror { transform: scaleX(-1); }
+  #flash { position: fixed; inset: 0; pointer-events: none; opacity: 0; transition: opacity .35s;
+    background: radial-gradient(ellipse at center, rgba(255,0,60,0) 35%, rgba(255,0,60,.75) 100%); }
+  #flash.on { opacity: 1; transition: none; }
+
+  /* HUD */
+  #hud { position: fixed; left: 0; right: 0; top: 0; padding: calc(env(safe-area-inset-top) + 10px) 14px 0; display: none;
+    justify-content: space-between; align-items: flex-start; pointer-events: none; text-shadow: 0 2px 6px rgba(0,0,0,.8); }
+  #hud.show { display: flex; }
+  #hp { font-size: 24px; letter-spacing: 2px; }
+  #scoreBox { text-align: right; }
+  #score { font-size: 34px; font-weight: 900; line-height: 1; }
+  #level, #combo { font-size: 14px; opacity: .9; margin-top: 4px; }
+  #tools { position: fixed; right: 12px; bottom: calc(env(safe-area-inset-bottom) + 14px); display: none; flex-direction: column; gap: 10px; }
+  #tools.show { display: flex; }
+  .round { width: 52px; height: 52px; border-radius: 50%; border: 2px solid rgba(255,255,255,.55); background: rgba(40,8,60,.6);
+    color: #fff; font-size: 22px; backdrop-filter: blur(6px); -webkit-backdrop-filter: blur(6px); }
+  #status { position: fixed; left: 12px; bottom: calc(env(safe-area-inset-bottom) + 16px); font-size: 13px; padding: 6px 10px;
+    border-radius: 14px; background: rgba(0,0,0,.45); display: none; max-width: 62vw; }
+  #status.show { display: block; }
+  #big { position: fixed; left: 0; right: 0; top: 38%; text-align: center; font-size: 64px; font-weight: 900; pointer-events: none;
+    text-shadow: 0 0 18px #b14cff, 0 4px 10px rgba(0,0,0,.9); opacity: 0; transition: opacity .3s, transform .3s; }
+  #big.on { opacity: 1; transform: scale(1.08); }
+  #big small { display: block; font-size: 20px; font-weight: 700; margin-top: 8px; }
+
+  /* Screens */
+  .screen { position: fixed; inset: 0; display: none; flex-direction: column; align-items: center; justify-content: center;
+    padding: 24px; text-align: center; background: radial-gradient(ellipse at 50% 30%, #4a1270 0%, #1a0626 60%, #0d0214 100%); overflow-y: auto; }
+  .screen.show { display: flex; }
+  .screen.dim { background: rgba(13,2,20,.82); }
+  .screen img { width: min(46vw, 210px); filter: drop-shadow(0 0 24px rgba(177,76,255,.8)); animation: bob 2.4s ease-in-out infinite; }
+  @keyframes bob { 0%,100%{transform:translateY(0)} 50%{transform:translateY(-8px)} }
+  h1 { font-size: 28px; margin: 10px 0 6px; text-shadow: 0 0 14px #b14cff; }
+  .sub { font-size: 15px; opacity: .9; line-height: 1.6; max-width: 380px; }
+  .modes { display: flex; flex-direction: column; gap: 12px; margin-top: 20px; width: min(100%, 360px); }
+  .btn { border: 0; border-radius: 16px; padding: 14px 16px; font-size: 18px; font-weight: 800; color: #fff; cursor: pointer;
+    background: linear-gradient(135deg, #b14cff, #6a1aa8); box-shadow: 0 6px 20px rgba(140,40,220,.5); }
+  .btn.alt { background: linear-gradient(135deg, #ff4f7a, #a3164a); box-shadow: 0 6px 20px rgba(220,40,100,.45); }
+  .btn span { display: block; font-size: 13px; font-weight: 500; opacity: .9; margin-top: 3px; }
+  .note { font-size: 12px; opacity: .65; margin-top: 16px; max-width: 360px; line-height: 1.5; }
+  #err { color: #ffb3c6; font-size: 14px; margin-top: 12px; max-width: 360px; line-height: 1.5; }
+  #finalScore { font-size: 60px; font-weight: 900; margin: 8px 0; text-shadow: 0 0 18px #b14cff; }
+</style>
+</head>
+<body>
+<div id="stage">
+  <video id="cam" playsinline muted autoplay></video>
+  <canvas id="gl"></canvas>
+  <canvas id="fx"></canvas>
+</div>
+<div id="flash"></div>
+
+<div id="hud">
+  <div id="hp"></div>
+  <div id="scoreBox"><div id="score">0</div><div id="level">LV 1</div><div id="combo"></div></div>
+</div>
+<div id="tools">
+  <button class="round" id="btnRecenter" title="把魔王放回畫面中央">🎯</button>
+  <button class="round" id="btnSwitch" title="切換前／後鏡頭">🔄</button>
+  <button class="round" id="btnSound" title="音效開關">🔊</button>
+</div>
+<div id="status"></div>
+<div id="big"></div>
+
+<div class="screen show" id="startScreen">
+  <img src="demon.png" alt="魔王">
+  <h1>接住魔王的小魔雲！</h1>
+  <p class="sub">魔王會用雙手丟出紫色小魔雲。<br>伸出雙手在鏡頭前把魔雲接住，<br>漏接一顆就會被攻擊、扣一顆心！</p>
+  <div class="modes">
+    <button class="btn" id="btnFront">自己玩（前鏡頭）<span>手機立起來，站遠一點讓雙手入鏡</span></button>
+    <button class="btn alt" id="btnBack">朋友幫拍（後鏡頭）<span>一人拿手機對著你，你用雙手接</span></button>
+  </div>
+  <div id="err"></div>
+  <p class="note">開始時魔王會出現在畫面正中央並固定在那個位置；轉動手機時，魔王會留在原地。需要允許相機與動作感應權限。</p>
+</div>
+
+<div class="screen dim" id="overScreen">
+  <h1>被魔王打倒了…</h1>
+  <div id="finalScore">0</div>
+  <p class="sub" id="overInfo"></p>
+  <div class="modes"><button class="btn" id="btnAgain">再挑戰一次</button></div>
+</div>
+
+<script type="importmap">
+{ "imports": { "three": "https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js" } }
+</script>
+<script type="module">
+import * as THREE from 'three';
+
+const MP_VER = '0.10.14';
+const MP_URL = `https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@${MP_VER}`;
+const HAND_MODEL = 'https://storage.googleapis.com/mediapipe-models/hand_landmarker/hand_landmarker/float16/1/hand_landmarker.task';
+
+const $ = id => document.getElementById(id);
+const video = $('cam'), glCanvas = $('gl'), fx = $('fx'), fctx = fx.getContext('2d');
+
+// ---------------- Game config ----------------
+const MAX_HP = 5;
+const DEMON_D = 4;                       // 魔王距離（公尺）
+const DEMON_H = 2.1;                     // 魔王高度
+const DEMON_W = DEMON_H * 516 / 609;
+const HAND_L = { u: 0.27, v: 0.30 };     // 魔王左手（畫面左）在圖上的位置
+const HAND_R = { u: 0.785, v: 0.22 };    // 魔王右手
+const CLOUD_SIZE = 0.14;
+const TARGET_DEPTH = 0.55;
+const CATCH_FROM = 0.5;                  // 飛行進度超過這個比例才能被接住
+const CAM_LONG_FOV = { environment: 66, user: 72 }; // 鏡頭長邊視角（估計值）
+
+const S = {
+  facing: 'user', stream: null, running: false, over: false, paused: false,
+  hp: MAX_HP, score: 0, combo: 0, level: 1, caughtTotal: 0, missed: 0,
+  throwTimer: 2.2, throwSide: 0, pendingThrows: [],
+  sound: true, best: 0, handReady: false, handFailed: false,
+};
+try { S.best = +localStorage.getItem('demonCloudBest') || 0; } catch (e) {}
+
+// ---------------- Three.js ----------------
+const renderer = new THREE.WebGLRenderer({ canvas: glCanvas, alpha: true, antialias: true });
+renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
+renderer.outputColorSpace = THREE.SRGBColorSpace;
+const scene = new THREE.Scene();
+const camera = new THREE.PerspectiveCamera(60, 1, 0.03, 100);
+
+function glowTexture(inner, outer) {
+  const c = document.createElement('canvas'); c.width = c.height = 128;
+  const g = c.getContext('2d');
+  const grd = g.createRadialGradient(64, 64, 0, 64, 64, 64);
+  grd.addColorStop(0, inner); grd.addColorStop(1, outer);
+  g.fillStyle = grd; g.fillRect(0, 0, 128, 128);
+  const t = new THREE.CanvasTexture(c); t.colorSpace = THREE.SRGBColorSpace; return t;
+}
+
+function cloudTexture() {
+  const c = document.createElement('canvas'); c.width = c.height = 256;
+  const g = c.getContext('2d');
+  const halo = g.createRadialGradient(128, 130, 30, 128, 130, 128);
+  halo.addColorStop(0, 'rgba(200,110,255,.65)'); halo.addColorStop(1, 'rgba(120,0,200,0)');
+  g.fillStyle = halo; g.fillRect(0, 0, 256, 256);
+  const puffs = [[128,145,56],[78,150,40],[178,150,40],[102,108,40],[156,104,44],[128,88,32],[56,166,26],[200,166,26]];
+  g.fillStyle = '#3a0862';
+  puffs.forEach(([x,y,r]) => { g.beginPath(); g.arc(x, y + 9, r, 0, Math.PI * 2); g.fill(); });
+  g.fillStyle = '#9a3ce0';
+  puffs.forEach(([x,y,r]) => { g.beginPath(); g.arc(x, y, r, 0, Math.PI * 2); g.fill(); });
+  puffs.forEach(([x,y,r]) => {
+    const hl = g.createRadialGradient(x - r*.35, y - r*.45, r*.05, x - r*.2, y - r*.25, r*.85);
+    hl.addColorStop(0, 'rgba(250,220,255,.95)'); hl.addColorStop(.5, 'rgba(200,120,255,.35)'); hl.addColorStop(1, 'rgba(160,60,240,0)');
+    g.fillStyle = hl; g.beginPath(); g.arc(x, y, r, 0, Math.PI * 2); g.fill();
+  });
+  // 生氣的小眼睛 + 嘴
+  g.fillStyle = '#1d0030';
+  [[108,140],[150,140]].forEach(([x,y]) => { g.beginPath(); g.ellipse(x, y, 9, 12, 0, 0, Math.PI * 2); g.fill(); });
+  g.fillStyle = '#fff';
+  [[111,135],[153,135]].forEach(([x,y]) => { g.beginPath(); g.arc(x, y, 3.5, 0, Math.PI * 2); g.fill(); });
+  g.strokeStyle = '#1d0030'; g.lineWidth = 6; g.lineCap = 'round';
+  g.beginPath(); g.moveTo(94,118); g.lineTo(118,128); g.moveTo(164,118); g.lineTo(140,128); g.stroke();
+  g.lineWidth = 5; g.beginPath(); g.arc(129, 172, 12, Math.PI * 1.1, Math.PI * 1.9, false); g.stroke();
+  const t = new THREE.CanvasTexture(c); t.colorSpace = THREE.SRGBColorSpace; return t;
+}
+
+const demonGroup = new THREE.Group(); scene.add(demonGroup);
+const demonTex = new THREE.TextureLoader().load('demon.png');
+demonTex.colorSpace = THREE.SRGBColorSpace;
+const aura = new THREE.Sprite(new THREE.SpriteMaterial({ map: glowTexture('rgba(190,80,255,.55)', 'rgba(90,0,160,0)'), depthWrite: false }));
+aura.scale.set(DEMON_W * 1.9, DEMON_H * 1.5, 1); aura.position.z = -0.05;
+demonGroup.add(aura);
+const demonMesh = new THREE.Mesh(new THREE.PlaneGeometry(DEMON_W, DEMON_H),
+  new THREE.MeshBasicMaterial({ map: demonTex, transparent: true, depthWrite: false }));
+demonGroup.add(demonMesh);
+function handLocal(h) { return new THREE.Vector3((h.u - .5) * DEMON_W, (.5 - h.v) * DEMON_H, 0.06); }
+const handGlowTex = glowTexture('rgba(240,200,255,1)', 'rgba(160,40,255,0)');
+const handGlows = [HAND_L, HAND_R].map(h => {
+  const s = new THREE.Sprite(new THREE.SpriteMaterial({ map: handGlowTex, transparent: true, depthWrite: false, blending: THREE.AdditiveBlending }));
+  s.position.copy(handLocal(h)); s.scale.setScalar(0.001); s.userData.power = 0;
+  demonMesh.add(s); return s;
+});
+
+const cloudTex = cloudTexture();
+const clouds = [];
+
+// ---------------- Device orientation (世界錨點) ----------------
+const deviceQ = new THREE.Quaternion();
+const targetQ = new THREE.Quaternion();
+const qFlip = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 1, 0), Math.PI);
+const q1 = new THREE.Quaternion(-Math.sqrt(.5), 0, 0, Math.sqrt(.5));
+const zee = new THREE.Vector3(0, 0, 1);
+const euler = new THREE.Euler(), q0 = new THREE.Quaternion();
+let hasOrientation = false, needRecenter = true, startTime = 0;
+
+function screenAngle() {
+  const a = (screen.orientation && typeof screen.orientation.angle === 'number') ? screen.orientation.angle : (window.orientation || 0);
+  return THREE.MathUtils.degToRad(a);
+}
+function onOrient(e) {
+  if (e.alpha == null && e.beta == null) return;
+  const d = THREE.MathUtils.degToRad;
+  euler.set(d(e.beta || 0), d(e.alpha || 0), -d(e.gamma || 0), 'YXZ');
+  deviceQ.setFromEuler(euler).multiply(q1).multiply(q0.setFromAxisAngle(zee, -screenAngle()));
+  if (!hasOrientation) { hasOrientation = true; needRecenter = true; }
+}
+window.addEventListener('deviceorientation', onOrient);
+
+function cameraTargetQuat(out) {
+  out.copy(deviceQ);
+  if (S.facing === 'user') out.multiply(qFlip); // 前鏡頭朝向螢幕外側（使用者）
+  return out;
+}
+function recenter() {
+  cameraTargetQuat(targetQ);
+  camera.quaternion.copy(targetQ);
+  demonGroup.quaternion.copy(targetQ);
+  demonGroup.position.set(0, 0, -DEMON_D).applyQuaternion(targetQ);
+  needRecenter = false;
+}
+
+// ---------------- Layout / projection ----------------
+let W = 1, H = 1, dpr = 1, vScale = 1, offX = 0, offY = 0, fScreen = 500;
+function layout() {
+  W = innerWidth; H = innerHeight; dpr = Math.min(devicePixelRatio, 2);
+  renderer.setSize(W, H, false);
+  fx.width = W * dpr; fx.height = H * dpr;
+  const vw = video.videoWidth || W, vh = video.videoHeight || H;
+  vScale = Math.max(W / vw, H / vh);
+  offX = (vw * vScale - W) / 2; offY = (vh * vScale - H) / 2;
+  const longFov = THREE.MathUtils.degToRad(CAM_LONG_FOV[S.facing]);
+  fScreen = (Math.max(vw, vh) / 2) / Math.tan(longFov / 2) * vScale;
+  camera.fov = THREE.MathUtils.radToDeg(2 * Math.atan((H / 2) / fScreen));
+  camera.aspect = W / H; camera.updateProjectionMatrix();
+}
+addEventListener('resize', layout);
+addEventListener('orientationchange', () => setTimeout(layout, 300));
+
+const tmpV = new THREE.Vector3();
+function projectToScreen(worldPos) {
+  tmpV.copy(worldPos).applyMatrix4(camera.matrixWorldInverse);
+  const depth = -tmpV.z;
+  tmpV.copy(worldPos).project(camera);
+  return { x: (tmpV.x + 1) / 2 * W, y: (1 - tmpV.y) / 2 * H, depth, behind: depth <= 0 };
+}
+const mirrorX = x => S.facing === 'user' ? W - x : x;   // 前鏡頭畫面左右翻轉
+
+// ---------------- Hand tracking ----------------
+let landmarker = null, lastVideoTime = -1;
+let hands = []; // [{x,y,r,pts}] 以未翻轉的畫面座標
+const HAND_LINKS = [[0,1],[1,2],[2,3],[3,4],[0,5],[5,6],[6,7],[7,8],[5,9],[9,10],[10,11],[11,12],[9,13],[13,14],[14,15],[15,16],[13,17],[17,18],[18,19],[19,20],[0,17]];
+
+const handPromise = (async () => {
+  try {
+    const { FilesetResolver, HandLandmarker } = await import(`${MP_URL}/vision_bundle.mjs`);
+    const files = await FilesetResolver.forVisionTasks(`${MP_URL}/wasm`);
+    const opts = d => ({ baseOptions: { modelAssetPath: HAND_MODEL, delegate: d }, runningMode: 'VIDEO', numHands: 2,
+      minHandDetectionConfidence: .5, minHandPresenceConfidence: .5, minTrackingConfidence: .5 });
+    try { landmarker = await HandLandmarker.createFromOptions(files, opts('GPU')); }
+    catch (e) { landmarker = await HandLandmarker.createFromOptions(files, opts('CPU')); }
+    S.handReady = true;
+  } catch (e) {
+    console.error(e); S.handFailed = true;
+  }
+})();
+
+function detectHands() {
+  if (!landmarker || video.readyState < 2 || video.currentTime === lastVideoTime) return;
+  lastVideoTime = video.currentTime;
+  let res;
+  try { res = landmarker.detectForVideo(video, performance.now()); } catch (e) { return; }
+  const vw = video.videoWidth, vh = video.videoHeight;
+  hands = (res.landmarks || []).map(lm => {
+    const pts = lm.map(p => ({ x: p.x * vw * vScale - offX, y: p.y * vh * vScale - offY }));
+    const palm = [0, 5, 9, 13, 17].reduce((a, i) => ({ x: a.x + pts[i].x / 5, y: a.y + pts[i].y / 5 }), { x: 0, y: 0 });
+    const r = Math.hypot(pts[0].x - pts[9].x, pts[0].y - pts[9].y);
+    return { x: palm.x, y: palm.y, r, pts };
+  });
+}
+
+// ---------------- Audio ----------------
+let actx = null;
+function sfx(type) {
+  if (!S.sound || !actx) return;
+  const t = actx.currentTime, o = actx.createOscillator(), g = actx.createGain();
+  o.connect(g); g.connect(actx.destination);
+  if (type === 'catch') {
+    o.type = 'sine'; o.frequency.setValueAtTime(660, t); o.frequency.exponentialRampToValueAtTime(1320, t + .12);
+    g.gain.setValueAtTime(.25, t); g.gain.exponentialRampToValueAtTime(.001, t + .25); o.start(t); o.stop(t + .26);
+  } else if (type === 'perfect') {
+    o.type = 'triangle'; [660, 880, 1320].forEach((f, i) => o.frequency.setValueAtTime(f, t + i * .07));
+    g.gain.setValueAtTime(.25, t); g.gain.exponentialRampToValueAtTime(.001, t + .35); o.start(t); o.stop(t + .36);
+  } else if (type === 'hit') {
+    o.type = 'sawtooth'; o.frequency.setValueAtTime(220, t); o.frequency.exponentialRampToValueAtTime(55, t + .35);
+    g.gain.setValueAtTime(.3, t); g.gain.exponentialRampToValueAtTime(.001, t + .4); o.start(t); o.stop(t + .41);
+  } else if (type === 'throw') {
+    o.type = 'triangle'; o.frequency.setValueAtTime(520, t); o.frequency.exponentialRampToValueAtTime(160, t + .3);
+    g.gain.setValueAtTime(.12, t); g.gain.exponentialRampToValueAtTime(.001, t + .3); o.start(t); o.stop(t + .31);
+  }
+}
+
+// ---------------- FX (2D overlay) ----------------
+const particles = [], floaters = [];
+function burst(x, y, color, n = 22) {
+  for (let i = 0; i < n; i++) {
+    const a = Math.random() * Math.PI * 2, sp = 120 + Math.random() * 320;
+    particles.push({ x, y, vx: Math.cos(a) * sp, vy: Math.sin(a) * sp - 80, life: 1, size: 3 + Math.random() * 6, color });
+  }
+}
+function floatText(x, y, text, color = '#fff') { floaters.push({ x, y, text, color, life: 1 }); }
+function bigText(html, ms = 900) {
+  const b = $('big'); b.innerHTML = html; b.classList.add('on');
+  clearTimeout(bigText._t); bigText._t = setTimeout(() => b.classList.remove('on'), ms);
+}
+function status(msg) { const s = $('status'); s.textContent = msg; s.classList.toggle('show', !!msg); }
+
+// ---------------- Game logic ----------------
+function levelParams() {
+  const L = S.level;
+  return {
+    interval: Math.max(0.85, 2.5 - 0.17 * (L - 1)),
+    duration: Math.max(1.25, 2.7 - 0.14 * (L - 1)),
+    doubleChance: Math.min(0.55, 0.1 * (L - 1)),
+  };
+}
+
+function queueThrow(side) {
+  S.pendingThrows.push({ side, t: 0.55 });
+}
+
+function spawnCloud(side) {
+  demonMesh.updateMatrixWorld(true);
+  const start = handLocal(side === 0 ? HAND_L : HAND_R).applyMatrix4(demonMesh.matrixWorld);
+  const hh = TARGET_DEPTH * Math.tan(THREE.MathUtils.degToRad(camera.fov / 2));
+  const hw = hh * camera.aspect;
+  // 目標：落在目前畫面中、手搆得到的位置（偏向丟出那隻手的一側）
+  const lean = side === 0 ? -1 : 1;
+  const tx = THREE.MathUtils.clamp((Math.random() * 1.1 - 0.55 + lean * 0.15) * hw, -0.62 * hw, 0.62 * hw);
+  const ty = (Math.random() * 0.9 - 0.5) * hh;
+  const target = new THREE.Vector3(tx, ty, -TARGET_DEPTH).applyQuaternion(camera.quaternion);
+  const sprite = new THREE.Sprite(new THREE.SpriteMaterial({ map: cloudTex, transparent: true, depthWrite: false }));
+  sprite.scale.setScalar(CLOUD_SIZE);
+  sprite.position.copy(start);
+  scene.add(sprite);
+  const up = new THREE.Vector3(0, 1, 0).applyQuaternion(camera.quaternion);
+  clouds.push({ sprite, start, target, up, t: 0, dur: levelParams().duration * (0.9 + Math.random() * 0.2),
+    arc: 0.35 + Math.random() * 0.4, spin: (Math.random() - .5) * 4, done: false });
+  sfx('throw');
+}
+
+function removeCloud(c) {
+  c.done = true; scene.remove(c.sprite); c.sprite.material.dispose();
+}
+
+function onCatch(c, scr, both) {
+  removeCloud(c);
+  S.combo++; S.caughtTotal++;
+  const pts = (both ? 2 : 1) + Math.floor(S.combo / 10);
+  S.score += pts;
+  const dx = mirrorX(scr.x);
+  burst(dx, scr.y, both ? '#ffe27a' : '#d79bff', both ? 34 : 22);
+  floatText(dx, scr.y - 20, both ? `雙手接住！+${pts}` : `+${pts}`, both ? '#ffe27a' : '#fff');
+  sfx(both ? 'perfect' : 'catch');
+  navigator.vibrate?.(30);
+  const newLevel = 1 + Math.floor(S.caughtTotal / 8);
+  if (newLevel > S.level) { S.level = newLevel; bigText(`LV ${S.level}<small>魔王生氣了！丟得更快了</small>`, 1300); }
+  updateHUD();
+}
+
+function onHit(c, scr) {
+  removeCloud(c);
+  S.hp--; S.combo = 0; S.missed++;
+  burst(mirrorX(scr.x), scr.y, '#ff4f7a', 26);
+  sfx('hit'); navigator.vibrate?.([80, 40, 120]);
+  $('flash').classList.add('on'); setTimeout(() => $('flash').classList.remove('on'), 60);
+  const st = $('stage'); st.classList.remove('shake'); void st.offsetWidth; st.classList.add('shake');
+  demonLaugh = 0.6;
+  updateHUD();
+  if (S.hp <= 0) gameOver();
+}
+
+let demonLaugh = 0;
+
+function updateHUD() {
+  $('hp').textContent = '❤️'.repeat(Math.max(0, S.hp)) + '🖤'.repeat(MAX_HP - Math.max(0, S.hp));
+  $('score').textContent = S.score;
+  $('level').textContent = `LV ${S.level}`;
+  $('combo').textContent = S.combo >= 3 ? `${S.combo} 連接！` : '';
+}
+
+function resetGame() {
+  clouds.slice().forEach(removeCloud); clouds.length = 0;
+  Object.assign(S, { hp: MAX_HP, score: 0, combo: 0, level: 1, caughtTotal: 0, missed: 0, throwTimer: 3.2, throwSide: 0, pendingThrows: [], over: false });
+  particles.length = 0; floaters.length = 0;
+  updateHUD();
+}
+
+function gameOver() {
+  S.running = false; S.over = true;
+  if (S.score > S.best) { S.best = S.score; try { localStorage.setItem('demonCloudBest', S.best); } catch (e) {} }
+  $('finalScore').textContent = S.score;
+  $('overInfo').innerHTML = `接住 ${S.caughtTotal} 朵魔雲・到達 LV ${S.level}<br>最高紀錄：${S.best}`;
+  setTimeout(() => $('overScreen').classList.add('show'), 700);
+}
+
+function countdown() {
+  let n = 3;
+  const tick = () => {
+    if (n > 0) { bigText(String(n), 800); n--; setTimeout(tick, 900); }
+    else { bigText('開始！<small>伸出雙手接住紫色魔雲</small>', 1200); S.running = true; }
+  };
+  tick();
+}
+
+// ---------------- Main loop ----------------
+let last = performance.now();
+function frame(now) {
+  requestAnimationFrame(frame);
+  const dt = Math.min(0.05, (now - last) / 1000); last = now;
+  if (!S.stream) return;
+
+  if (needRecenter && (hasOrientation || now - startTime > 800)) recenter();
+  cameraTargetQuat(targetQ);
+  camera.quaternion.slerp(targetQ, 0.55);
+  camera.updateMatrixWorld();
+
+  detectHands();
+
+  // 魔王動畫
+  const tSec = now / 1000;
+  const bob = Math.sin(tSec * 2) * 0.05;
+  demonLaugh = Math.max(0, demonLaugh - dt);
+  const laughS = 1 + Math.sin(demonLaugh * 30) * 0.03 * (demonLaugh > 0 ? 1 : 0);
+  demonMesh.position.y = bob; demonMesh.scale.set(laughS, laughS, 1);
+  aura.material.opacity = 0.65 + Math.sin(tSec * 3) * 0.25;
+
+  if (S.running && !S.paused) {
+    S.throwTimer -= dt;
+    if (S.throwTimer <= 0) {
+      const p = levelParams();
+      if (Math.random() < p.doubleChance) { queueThrow(0); queueThrow(1); }
+      else { queueThrow(S.throwSide); S.throwSide = 1 - S.throwSide; }
+      S.throwTimer = p.interval * (0.85 + Math.random() * 0.3);
+    }
+  }
+  // 出手前蓄力（手部發光）
+  handGlows.forEach(g => g.userData.power = Math.max(0, g.userData.power - dt * 3));
+  for (let i = S.pendingThrows.length - 1; i >= 0; i--) {
+    const pt = S.pendingThrows[i];
+    pt.t -= dt;
+    handGlows[pt.side].userData.power = Math.max(handGlows[pt.side].userData.power, 1 - pt.t / 0.55);
+    if (pt.t <= 0) { S.pendingThrows.splice(i, 1); if (S.running) spawnCloud(pt.side); }
+  }
+  handGlows.forEach(g => g.scale.setScalar(0.05 + g.userData.power * 0.55));
+
+  // 魔雲飛行 + 判定
+  for (const c of clouds) {
+    if (c.done) continue;
+    if (S.running) c.t += dt / c.dur;
+    const t = Math.min(1, c.t);
+    const e = t * 0.55 + t * t * 0.45;
+    c.sprite.position.lerpVectors(c.start, c.target, e).addScaledVector(c.up, Math.sin(Math.PI * t) * c.arc);
+    c.sprite.material.rotation = Math.sin(tSec * 3 + c.spin) * 0.25;
+    if (!S.running) continue;
+    const scr = projectToScreen(c.sprite.position);
+    if (t >= CATCH_FROM && !scr.behind) {
+      const cr = (CLOUD_SIZE / 2) * fScreen / scr.depth;
+      const near = hands.filter(h => Math.hypot(h.x - scr.x, h.y - scr.y) < cr * 0.95 + Math.min(h.r, 160) * 0.55);
+      if (near.length) { onCatch(c, scr, near.length >= 2); continue; }
+    }
+    if (c.t >= 1) onHit(c, scr);
+  }
+  for (let i = clouds.length - 1; i >= 0; i--) if (clouds[i].done) clouds.splice(i, 1);
+
+  renderer.render(scene, camera);
+  drawFx(dt);
+}
+
+function drawFx(dt) {
+  fctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  fctx.clearRect(0, 0, W, H);
+
+  // 雙手顯示
+  for (const h of hands) {
+    fctx.strokeStyle = 'rgba(255,255,255,.55)'; fctx.lineWidth = 3; fctx.lineCap = 'round';
+    fctx.beginPath();
+    for (const [a, b] of HAND_LINKS) { fctx.moveTo(mirrorX(h.pts[a].x), h.pts[a].y); fctx.lineTo(mirrorX(h.pts[b].x), h.pts[b].y); }
+    fctx.stroke();
+    const r = Math.min(h.r, 160) * 0.55;
+    const grd = fctx.createRadialGradient(mirrorX(h.x), h.y, r * .2, mirrorX(h.x), h.y, r);
+    grd.addColorStop(0, 'rgba(120,255,220,.35)'); grd.addColorStop(1, 'rgba(120,255,220,0)');
+    fctx.fillStyle = grd; fctx.beginPath(); fctx.arc(mirrorX(h.x), h.y, r, 0, Math.PI * 2); fctx.fill();
+    fctx.strokeStyle = 'rgba(120,255,220,.9)'; fctx.lineWidth = 3;
+    fctx.beginPath(); fctx.arc(mirrorX(h.x), h.y, r, 0, Math.PI * 2); fctx.stroke();
+  }
+
+  // 魔王不在畫面中時，顯示方向箭頭
+  const dp = projectToScreen(demonGroup.position);
+  let dx = mirrorX(dp.x) - W / 2, dy = dp.y - H / 2;
+  if (dp.behind) { dx = -dx; dy = -dy; }
+  const off = dp.behind || dp.x < -40 || dp.x > W + 40 || dp.y < -40 || dp.y > H + 40;
+  if (off && S.stream && (dx || dy)) {
+    const a = Math.atan2(dy, dx), m = 44;
+    const k = Math.min((W / 2 - m) / Math.abs(Math.cos(a) || 1e-6), (H / 2 - m) / Math.abs(Math.sin(a) || 1e-6));
+    const ax = W / 2 + Math.cos(a) * k, ay = H / 2 + Math.sin(a) * k;
+    fctx.save(); fctx.translate(ax, ay); fctx.rotate(a);
+    fctx.fillStyle = 'rgba(200,90,255,.95)'; fctx.shadowColor = '#b14cff'; fctx.shadowBlur = 16;
+    fctx.beginPath(); fctx.moveTo(26, 0); fctx.lineTo(-14, -18); fctx.lineTo(-6, 0); fctx.lineTo(-14, 18); fctx.closePath(); fctx.fill();
+    fctx.restore();
+    fctx.font = 'bold 14px sans-serif'; fctx.fillStyle = '#fff'; fctx.textAlign = 'center';
+    fctx.fillText('魔王在這邊', ax - Math.cos(a) * 72, ay - Math.sin(a) * 40 + 5);
+  }
+
+  // 粒子
+  for (let i = particles.length - 1; i >= 0; i--) {
+    const p = particles[i]; p.life -= dt * 1.6;
+    if (p.life <= 0) { particles.splice(i, 1); continue; }
+    p.x += p.vx * dt; p.y += p.vy * dt; p.vy += 500 * dt;
+    fctx.globalAlpha = p.life; fctx.fillStyle = p.color;
+    fctx.beginPath(); fctx.arc(p.x, p.y, p.size * p.life, 0, Math.PI * 2); fctx.fill();
+  }
+  fctx.globalAlpha = 1;
+  for (let i = floaters.length - 1; i >= 0; i--) {
+    const f = floaters[i]; f.life -= dt * 1.1;
+    if (f.life <= 0) { floaters.splice(i, 1); continue; }
+    f.y -= 60 * dt;
+    fctx.globalAlpha = Math.min(1, f.life * 1.5);
+    fctx.font = '900 28px sans-serif'; fctx.textAlign = 'center';
+    fctx.lineWidth = 5; fctx.strokeStyle = 'rgba(40,0,60,.9)'; fctx.strokeText(f.text, f.x, f.y);
+    fctx.fillStyle = f.color; fctx.fillText(f.text, f.x, f.y);
+  }
+  fctx.globalAlpha = 1;
+}
+requestAnimationFrame(frame);
+
+// 手部辨識載入失敗時：改用點螢幕接魔雲
+fx.addEventListener('pointerdown', e => {
+  if (!S.handFailed || !S.running) return;
+  const x = mirrorX(e.clientX), y = e.clientY;
+  for (const c of clouds) {
+    if (c.done || c.t < CATCH_FROM) continue;
+    const scr = projectToScreen(c.sprite.position);
+    const cr = (CLOUD_SIZE / 2) * fScreen / scr.depth;
+    if (Math.hypot(scr.x - x, scr.y - y) < cr * 1.3) { onCatch(c, scr, false); break; }
+  }
+});
+
+// ---------------- Start / camera ----------------
+async function requestMotion() {
+  try {
+    if (typeof DeviceOrientationEvent !== 'undefined' && typeof DeviceOrientationEvent.requestPermission === 'function') {
+      const r = await DeviceOrientationEvent.requestPermission();
+      if (r !== 'granted') status('未取得動作感應權限：魔王無法固定位置');
+    }
+  } catch (e) {}
+}
+
+async function openCamera(facing) {
+  if (S.stream) S.stream.getTracks().forEach(t => t.stop());
+  const stream = await navigator.mediaDevices.getUserMedia({
+    video: { facingMode: { ideal: facing }, width: { ideal: 1280 }, height: { ideal: 720 } }, audio: false });
+  S.stream = stream; S.facing = facing;
+  video.srcObject = stream;
+  await video.play().catch(() => {});
+  await new Promise(r => video.readyState >= 2 ? r() : video.addEventListener('loadeddata', r, { once: true }));
+  video.classList.toggle('mirror', facing === 'user');
+  glCanvas.classList.toggle('mirror', facing === 'user');
+  layout();
+  lastVideoTime = -1; hands = [];
+  startTime = performance.now(); needRecenter = true;
+}
+
+async function startGame(facing) {
+  $('err').textContent = '';
+  try {
+    if (!actx) { const AC = window.AudioContext || window.webkitAudioContext; if (AC) actx = new AC(); }
+    actx?.resume();
+  } catch (e) {}
+  await requestMotion();
+  if (!navigator.mediaDevices?.getUserMedia) {
+    $('err').textContent = '這個瀏覽器無法開啟相機。請用 Safari（iPhone）或 Chrome（Android）開啟，並確認網址是 https。';
+    return;
+  }
+  try { await openCamera(facing); }
+  catch (e) {
+    $('err').textContent = '無法開啟相機：' + (e.name === 'NotAllowedError' ? '請在瀏覽器設定中允許相機權限後重新整理。' : e.message);
+    return;
+  }
+  $('startScreen').classList.remove('show');
+  $('hud').classList.add('show'); $('tools').classList.add('show');
+  resetGame();
+  if (!S.handReady && !S.handFailed) {
+    status('載入手部辨識中…');
+    await handPromise;
+  }
+  if (S.handFailed) status('手部辨識載入失敗，改成「點魔雲」也能接住');
+  else status('');
+  setTimeout(() => { if (!hasOrientation) status(S.handFailed ? '手部辨識載入失敗，改成「點魔雲」也能接住' : '此裝置沒有陀螺儀：魔王會固定在畫面中央'); }, 1500);
+  countdown();
+}
+
+$('btnFront').onclick = () => startGame('user');
+$('btnBack').onclick = () => startGame('environment');
+$('btnAgain').onclick = () => { $('overScreen').classList.remove('show'); resetGame(); recenter(); countdown(); };
+$('btnRecenter').onclick = () => { recenter(); bigText('🎯', 500); };
+$('btnSwitch').onclick = async () => {
+  try { await openCamera(S.facing === 'user' ? 'environment' : 'user'); } catch (e) { status('切換鏡頭失敗'); }
+};
+$('btnSound').onclick = () => { S.sound = !S.sound; $('btnSound').textContent = S.sound ? '🔊' : '🔇'; };
+document.addEventListener('visibilitychange', () => { S.paused = document.hidden; });
+updateHUD();
+window.__game = { S, clouds, demonGroup, camera, projectToScreen }; // 除錯用
+</script>
+</body>
+</html>
